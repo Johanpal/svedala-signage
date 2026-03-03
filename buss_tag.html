@@ -92,99 +92,124 @@
     <div class="status-bar" id="debug">System OK</div>
 
     <script>
-        const apiKey = '029d3e62-8c57-4161-a699-e81a51c12931';
+      const apiKey = '029d3e62-8c57-4161-a699-e81a51c12931';
+const svedalaExtId = '740000155'; // Hårdkodat ID för att spara anrop
 
-        function getDelay(sched, real) {
-            if (!real || sched === real) return 0;
-            const [sH, sM] = sched.split(':').map(Number);
-            const [rH, rM] = real.split(':').map(Number);
-            return (rH * 60 + rM) - (sH * 60 + sM);
-        }
+function isDisplayTime() {
+    const now = new Date();
+    const day = now.getDay(); // 0 = Söndag, 1-5 = Mån-Fre, 6 = Lördag
+    const hour = now.getHours();
+    
+    // Vardagar (1-5) mellan kl 07:00 och 17:59
+    return (day >= 1 && day <= 5) && (hour >= 7 && hour < 18);
+}
 
-        async function updateBoard() {
-            try {
-                const searchRes = await fetch(`https://api.resrobot.se/v2.1/location.name?input=Svedala station&format=json&accessId=${apiKey}`);
-                const searchData = await searchRes.json();
-                if (!searchData.stopLocationOrCoordLocation) return;
-                
-                const extId = searchData.stopLocationOrCoordLocation[0].StopLocation.extId;
-                const depRes = await fetch(`https://api.resrobot.se/v2.1/departureBoard?id=${extId}&format=json&accessId=${apiKey}`);
-                const depData = await depRes.json();
+function getDelay(sched, real) {
+    if (!real || sched === real) return 0;
+    const [sH, sM] = sched.split(':').map(Number);
+    const [rH, rM] = real.split(':').map(Number);
+    return (rH * 60 + rM) - (sH * 60 + sM);
+}
 
-                let html = '';
-                if (depData.Departure) {
-                    const filtered = depData.Departure.filter(dep => {
-                        const line = (dep.ProductAtStop && dep.ProductAtStop.displayNumber) || dep.transportNumber || "";
-                        const dest = (dep.direction || "").toLowerCase();
-                        const isTrain = (dep.ProductAtStop && dep.ProductAtStop.catOutL === "JLT") || (dep.name && dep.name.toLowerCase().includes('tåg'));
+function getMinutesUntil(timeStr) {
+    const now = new Date();
+    const [h, m] = timeStr.split(':').map(Number);
+    const target = new Date();
+    target.setHours(h, m, 0);
+    return Math.round((target - now) / 60000);
+}
 
-                        if (isTrain) return true;
-                        if (line === "141" && dest.includes("malmö")) return true;
-                        if (line === "145" && dest.includes("trelleborg")) return true;
-                        if (line === "165") return true;
+async function updateBoard() {
+    // 1. Kontrollera om vi ska köra
+    if (!isDisplayTime()) {
+        document.getElementById('board').innerHTML = 
+            '<div style="text-align:center; font-size: 2rem; margin-top: 50px; color: #999;">Skärmen är vilande (Endast aktiv vardagar 07-18)</div>';
+        document.getElementById('debug').innerText = "Vänteläge - Utanför schemalagd tid";
+        return;
+    }
 
-                        return false;
-                    });
+    try {
+        // 2. Anropa direkt med hårdkodat ID för att spara anrop
+        const depRes = await fetch(`https://api.resrobot.se/v2.1/departureBoard?id=${svedalaExtId}&format=json&accessId=${apiKey}`);
+        const depData = await depRes.json();
 
-                    filtered.slice(0, 8).forEach(dep => {
-                        const line = (dep.ProductAtStop && dep.ProductAtStop.displayNumber) || dep.transportNumber;
-                        let destName = (dep.direction || "").split(',')[0].replace('Svedala station', '').trim();
-                        const isTrain = (dep.ProductAtStop && dep.ProductAtStop.catOutL === "JLT") || (dep.name && dep.name.toLowerCase().includes('tåg'));
-                        const dLow = destName.toLowerCase();
+        let html = '';
+        if (depData.Departure) {
+            const filtered = depData.Departure.filter(dep => {
+                const line = (dep.ProductAtStop && dep.ProductAtStop.displayNumber) || dep.transportNumber || "";
+                const dest = (dep.direction || "").toLowerCase();
+                const isTrain = (dep.ProductAtStop && dep.ProductAtStop.catOutL === "JLT") || (dep.name && dep.name.toLowerCase().includes('tåg'));
 
-                        // UPPDATERAD VIA-LOGIK
-                        let viaText = "";
-                        if (isTrain) {
-                            if (dLow.includes("helsingborg")) {
-                                viaText = "VIA MALMÖ C, LUND C";
-                            } else if (dLow.includes("simrishamn")) {
-                                viaText = "VIA SKURUP, YSTAD";
-                            } else if (dLow.includes("ystad")) {
-                                viaText = "VIA SKURUP";
-                            }
-                        } else {
-                            if (line === "141" && (dLow.includes("malmö") || dLow.includes("södervärn"))) {
-                                viaText = "VIA MALMÖ JÄGERSRO";
-                            } else if (line === "145" && dLow.includes("trelleborg")) {
-                                viaText = "VIA ALSTAD, GYLLE";
-                            } else if (line === "165" && dLow.includes("lund")) {
-                                viaText = "VIA KLÅGERUP, STAFFANSTORP VÄG 108";
-                            }
-                        }
+                if (isTrain) return true;
+                if (line === "141" && dest.includes("malmö")) return true;
+                if (line === "145" && dest.includes("trelleborg")) return true;
+                if (line === "165") return true;
+                return false;
+            });
 
-                        const schedTime = dep.time.substring(0, 5);
-                        const realTime = (dep.rtTime || dep.time).substring(0, 5);
-                        const delayMin = getDelay(schedTime, realTime);
+            filtered.slice(0, 8).forEach((dep, index) => {
+                const line = (dep.ProductAtStop && dep.ProductAtStop.displayNumber) || dep.transportNumber;
+                let destName = (dep.direction || "").split(',')[0].replace('Svedala station', '').trim();
+                const isTrain = (dep.ProductAtStop && dep.ProductAtStop.catOutL === "JLT") || (dep.name && dep.name.toLowerCase().includes('tåg'));
+                const dLow = destName.toLowerCase();
 
-                        html += `
-                            <div class="departure-row ${isTrain ? 'train-row' : ''}">
-                                <div class="line-badge ${isTrain ? 'train' : ''}">${line}</div>
-                                <div class="dest-container">
-                                    <div class="dest">${destName}</div>
-                                    ${viaText ? `<div class="via">${viaText}</div>` : ''}
-                                </div>
-                                <div class="time-box">
-                                    <span class="time">${realTime}</span>
-                                    ${delayMin > 0 ? `<span class="delay">+${delayMin}</span>` : ''}
-                                </div>
-                            </div>`;
-                    });
-                    document.getElementById('board').innerHTML = html;
-                    document.getElementById('debug').innerText = "Uppdaterad: " + new Date().toLocaleTimeString();
+                let viaText = "";
+                if (isTrain) {
+                    if (dLow.includes("helsingborg")) viaText = "VIA MALMÖ C, LUND C";
+                    else if (dLow.includes("simrishamn")) viaText = "VIA SKURUP, YSTAD";
+                    else if (dLow.includes("ystad")) viaText = "VIA SKURUP";
+                } else {
+                    if (line === "141" && (dLow.includes("malmö") || dLow.includes("södervärn"))) viaText = "VIA MALMÖ JÄGERSRO";
+                    else if (line === "145" && dLow.includes("trelleborg")) viaText = "VIA ALSTAD, GYLLE";
+                    else if (line === "165" && dLow.includes("lund")) viaText = "VIA KLÅGERUP, STAFFANSTORP VÄG 108";
                 }
-            } catch (error) {
-                console.error(error);
-            }
-        }
 
-        function clock() {
-            document.getElementById('clock').innerText = new Date().toLocaleTimeString('sv-SE', {hour:'2-digit', minute:'2-digit'});
-        }
+                const schedTime = dep.time.substring(0, 5);
+                const realTime = (dep.rtTime || dep.time).substring(0, 5);
+                const delayMin = getDelay(schedTime, realTime);
+                
+                let minutesInfo = "";
+                if (index < 3) {
+                    const minLeft = getMinutesUntil(realTime);
+                    minutesInfo = minLeft <= 0 ? "(Avgår nu)" : `(Avgår om ${minLeft} min)`;
+                }
 
-        setInterval(clock, 1000);
-        setInterval(updateBoard, 30000);
-        clock();
-        updateBoard();
+                html += `
+                    <div class="departure-row ${isTrain ? 'train-row' : 'bus-row'}">
+                        <div class="line-badge ${isTrain ? 'train-badge' : ''}">${line}</div>
+                        <div class="dest-container">
+                            <div class="dest-row">
+                                <div class="dest">${destName}</div>
+                                ${minutesInfo ? `<div class="in-minutes-inline">${minutesInfo}</div>` : ''}
+                            </div>
+                            ${viaText ? `<div class="via">${viaText}</div>` : ''}
+                        </div>
+                        <div class="time-box">
+                            <span class="time">${realTime}</span>
+                            ${delayMin > 0 ? `<span class="delay">+${delayMin}</span>` : ''}
+                        </div>
+                    </div>`;
+            });
+            document.getElementById('board').innerHTML = html;
+            document.getElementById('debug').innerText = "Uppdaterad: " + new Date().toLocaleTimeString();
+        }
+    } catch (error) {
+        console.error("Fetch error:", error);
+        document.getElementById('debug').innerText = "Anslutningsfel vid uppdatering";
+    }
+}
+
+function clock() {
+    document.getElementById('clock').innerText = new Date().toLocaleTimeString('sv-SE', {hour:'2-digit', minute:'2-digit'});
+}
+
+// Starta intervaller
+setInterval(clock, 1000);
+setInterval(updateBoard, 60000); // Ändrat till 60 sekunder för att spara ytterligare på kvoten
+
+// Initial körning
+clock();
+updateBoard();
     </script>
 </body>
 </html>
